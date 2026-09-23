@@ -24,7 +24,7 @@ Turn the sound on. Any key, click, tap or big mouse wiggle is "a press". There i
 
 Extras: stars appear where each key sits on the keyboard, sparkles follow the mouse, and the cake wiggles if nothing happens for a while. Every cake is a new mix of inside, frosting colour and style, topping and fruit, and now and then a piñata cake spills candies on the first cut.
 
-**To leave:** hold **Esc** for 2 seconds.
+**To leave:** hold **Esc** for 2 seconds. Esc, like Ctrl, Shift, Alt and ⌘, only makes sparkles, so leaving never plays a turn.
 
 ## Parent corner
 
