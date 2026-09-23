@@ -1,0 +1,785 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cake Party</title>
+<link rel="icon" href="data:,">
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #d4efff; }
+  body { overscroll-behavior: none; touch-action: none; user-select: none; -webkit-user-select: none; cursor: pointer; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; }
+  #hint { position: fixed; left: 50%; bottom: 8px; transform: translateX(-50%); width: max-content; max-width: calc(100% - 32px); box-sizing: border-box;
+    padding: 4px 12px; border-radius: 14px; background: #ffffffc0; color: #245066; font: 13px/1.4 system-ui, sans-serif; text-align: center;
+    pointer-events: none; transition: opacity 1s; }
+  #corner { position: fixed; inset: 0; display: grid; place-items: center; background: rgba(20, 50, 70, .35); cursor: auto;
+    touch-action: auto; user-select: text; -webkit-user-select: text; }
+  #corner[hidden] { display: none; }
+  #corner form { width: min(540px, calc(100% - 32px)); max-height: calc(100% - 32px); overflow: auto; box-sizing: border-box; padding: 20px 24px;
+    background: #fffdf8; border-radius: 22px; box-shadow: 0 18px 50px rgba(20, 50, 70, .3); font: 15px/1.45 system-ui, sans-serif; color: #2b3a4a; }
+  #corner h1 { margin: 0 0 4px; font-size: 22px; color: #c2255c; }
+  #corner fieldset { margin: 12px 0 0; padding: 8px 14px 10px; border: 1px solid #f1dde6; border-radius: 14px; min-width: 0; }
+  #corner legend { padding: 0 6px; font-weight: 700; }
+  #corner label { display: flex; align-items: center; gap: 8px; margin: 5px 0; min-width: 0; }
+  #corner .two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; }
+  #corner input[type=text], #corner input[type=date], #corner select { flex: 1; min-width: 0; padding: 6px 10px; font: inherit; border: 1px solid #d8c7d0; border-radius: 10px; background: #fff; }
+  #corner input[type=range] { flex: 1; min-width: 0; }
+  #corner .small { margin: 6px 0 0; font-size: 13px; color: #5f6f7f; }
+  #corner .row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+  #corner button { padding: 10px 18px; font: 600 15px system-ui, sans-serif; border: 0; border-radius: 99px; background: #f1f3f5; color: #2b3a4a; cursor: pointer; }
+  #corner button.main { background: #c2255c; color: #fff; }
+  @media (max-width: 480px) { #corner .two { grid-template-columns: minmax(0, 1fr); } }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hint">For grown-ups, sound on. Any key, click, tap or big mouse wiggle plays: she picks a cake, opens the present, blows out the candles, then each press cuts a slice while a friend sings the next line of Happy Birthday. It goes full screen; hold Esc for 2 seconds to leave. Parent corner: hold the top-left corner for 3 seconds, or press Ctrl+Shift+P.</div>
+<div id="corner" hidden>
+  <form id="pc" autocomplete="off">
+    <h1>Parent corner</h1>
+    <p class="small">Changes are saved in this browser straight away. New choices start with the next cake.</p>
+    <fieldset><legend>The party</legend>
+      <label>Cakes before bye-bye <select name="cakes"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
+      <label><input type="radio" name="slices" value="4"> 4 slices: each cut sings a whole line</label>
+      <label><input type="radio" name="slices" value="8"> 8 slices: each cut sings half a line</label>
+    </fieldset>
+    <fieldset><legend>Cakes she can pick from</legend><div class="two" id="insides"></div></fieldset>
+    <fieldset><legend>Sound and motion</legend>
+      <label>Volume <input type="range" name="volume" min="0" max="100" step="5"></label>
+      <label><input type="checkbox" name="calm"> Calm mode: fewer sparkles, smaller bounces</label>
+    </fieldset>
+    <fieldset><legend>Personal touches (optional)</legend>
+      <label>Name on the cake <input type="text" name="kidname" maxlength="16" spellcheck="false"></label>
+      <label>Birthday <input type="date" name="bday"></label>
+      <p class="small">Kept only in this browser on this laptop and never sent anywhere. The name goes on the cake and the present; in the birthday week a big number balloon joins the party.</p>
+      <div class="row"><button type="button" id="forget">Forget name and birthday</button></div>
+    </fieldset>
+    <div class="row"><button type="submit" class="main">Back to the party</button><button type="button" id="restart">Start a new party</button></div>
+    <p class="small">Hold Esc for 2 seconds to leave full screen.</p>
+  </form>
+</div>
+<script>
+'use strict';
+// Cake party. She picks one of three bouncing cakes, which hops onto the stand and disappears into a giggling present. A press
+// pops the present open and the cake jumps out; the next press blows out the candles. Then every cut is sung: each friend sings
+// one line of Happy Birthday in its own voice, the knife chops and the slice pulls out on that line's notes, and the slice flies
+// to whoever just sang. After the party the next three cakes pop up, until the friends wave bye-bye and the screen rests.
+const TAU = Math.PI * 2, K = 0.42;
+const CHOIR = true; // the friends' choir: each friend sings its line in its own voice. false = a music box plays the song and nobody sings
+const BEAT = 0.42; // a cut, in beats: chops land on "Hap-py" (0) and "birth" (1), the slice pulls out on "day" (2), flies on "to" (3), lands on "you" (4)
+const BITES = [1.1, 1.9, 2.7]; // beats after landing
+const cv = document.getElementById('c'), g = cv.getContext('2d'), hint = document.getElementById('hint');
+const corner = document.getElementById('corner'), form = document.getElementById('pc');
+const CONF = ['#ff6b6b', '#ffd43b', '#69db7c', '#4dabf7', '#b197fc', '#ffffff'];
+const INSIDES = { // what she sees when a slice turns; fill sits between the layers
+  rainbow: { label: 'Rainbow', layers: ['#ff6b6b', '#ffa94d', '#ffd43b', '#69db7c', '#4dabf7', '#9775fa'] },
+  chocolate: { label: 'Chocolate', layers: ['#5c2e14', '#9a5a30', '#5c2e14', '#9a5a30'] },
+  strawberry: { label: 'Strawberry', layers: ['#ff8fab', '#ffdeeb', '#ff8fab', '#ffdeeb'] },
+  vanilla: { label: 'Vanilla and jam', layers: ['#ffe8a3', '#ffe8a3', '#ffe8a3'], fill: '#f03e5e' },
+  lemon: { label: 'Lemon and blueberry', layers: ['#fff1a8', '#5c7cfa', '#fff1a8', '#5c7cfa'] },
+  mint: { label: 'Mint and chocolate', layers: ['#63e6be', '#5c2e14', '#63e6be', '#5c2e14'] },
+};
+const FROST = [ // saturated on purpose: the cake is the boldest thing on screen
+  { top: '#ff7ab8', side: '#f2338a', cream: '#ffffff', handle: '#4dabf7', spr: CONF },
+  { top: '#7a3f1d', side: '#4a230d', cream: '#fff4e0', handle: '#ffd43b', spr: ['#ffffff', '#ff8fbd', '#ffd43b', '#74c0fc'] },
+  { top: '#ffe14d', side: '#ffb300', cream: '#ffffff', handle: '#ff6b6b', spr: ['#4263eb', '#ffffff', '#ff6b6b'] },
+  { top: '#63e6be', side: '#0ca678', cream: '#ffffff', handle: '#ff8fbd', spr: ['#ffffff', '#ff6b6b', '#7048e8', '#ffd43b'] },
+  { top: '#b197fc', side: '#7048e8', cream: '#ffffff', handle: '#ffd43b', spr: ['#ffffff', '#ffd43b', '#ff6b6b', '#69db7c'] },
+  { top: '#74c0fc', side: '#1c7ed6', cream: '#ffffff', handle: '#ff922b', spr: ['#ffffff', '#ffd43b', '#ff6b6b', '#b2f2bb'] },
+];
+const STYLES = ['drip', 'smooth', 'piped'], TOPPINGS = ['sprinkles', 'stars', 'buttons', 'hearts'], FRUITS = ['strawberry', 'cherry', 'blueberry', 'kiwi'];
+const WRAP = [['#9b5de5', '#ffd43b'], ['#ff922b', '#4dabf7'], ['#ff4d8d', '#ffe066'], ['#20c997', '#ff6b6b']]; // present paper, ribbon
+const FRIENDS = [ // each sings one line in its own voice (the last line is everyone together) and gets that slice
+  { ear: 'round', fur: '#b8784a', face: '#f3d3b0', v: { oct: 0, type: 'triangle', vib: 5, vol: 0.34 } },               // bear: low and wobbly
+  { ear: 'long', fur: '#fbf4f8', face: '#ffffff', v: { oct: 12, type: 'sine', vol: 0.26 } },                              // bunny: clear
+  { ear: 'point', fur: '#ff9f43', face: '#fff0db', v: { oct: 12, type: 'sawtooth', lp: 1400, from: 0.9, vol: 0.12 } },  // kitty: a meowy swoop
+  { ear: 'tuft', fur: '#ffd43b', face: '#ffe98a', v: { oct: 24, type: 'sine', vib: 9, from: 1.06, vol: 0.11 } },          // chick: high and chirpy
+];
+const MUSICBOX = { oct: 12, type: 'sine', vol: 0.2 };
+const LINES = [ // [midi, beats]; line 3 holds on "dear ..." so a grown-up can sing the name
+  [[62, .75], [62, .25], [64, 1], [62, 1], [67, 1], [66, 2]],
+  [[62, .75], [62, .25], [64, 1], [62, 1], [69, 1], [67, 2]],
+  [[62, .75], [62, .25], [74, 1], [71, 1], [67, 1], [66, 1], [64, 2]],
+  [[72, .75], [72, .25], [71, 1], [67, 1], [69, 1], [67, 2]]];
+const ease = p => p < 0.5 ? 2 * p * p : 1 - (2 - 2 * p) ** 2 / 2;
+const clamp = p => Math.max(0, Math.min(1, p));
+const wob = t => t < 0 ? 0 : Math.exp(-5 * t) * Math.sin(18 * t);
+const inArc = (a, A, B) => ((a - A) % TAU + TAU) % TAU <= B - A + 1e-9;
+const pickOne = a => a[Math.random() * a.length | 0];
+const shuffle = a => a.map(v => [Math.random(), v]).sort((p, q) => p[0] - q[0]).map(p => p[1]);
+console.assert(inArc(0.1, 0, 1) && !inArc(2, 0, 1) && inArc(TAU + 0.5, 0, 1) && inArc(0.5 - TAU, 0, 1), 'inArc');
+
+// ---------- slices: the cake never turns ----------
+// Slices go front, then alternately left and right, then back, so the gap always opens towards her and every cut face she can see shows its layers.
+let N, W1, FRONT, ORDER, CHOPS, PH; // set per cake: slice count, slice angle, where slice 0 starts, cut order, the cut lines each chop lands on, and the song phrase per cut
+const lineAt = l => l * W1 + FRONT; // angle of cut line l
+const who = k => k * 4 / N | 0; // the friend who sings cut k and gets its slice
+function setSlices(n) {
+  N = n; W1 = TAU / N; FRONT = TAU / 4 - W1 / 2;
+  ORDER = N === 4 ? [0, 1, 3, 2] : [0, 1, 7, 2, 6, 3, 5, 4];
+  const done = new Set();
+  CHOPS = ORDER.map(i => { const ls = [i, (i + 1) % N], fresh = ls.filter(l => !done.has(l)); ls.forEach(l => done.add(l)); return fresh.length === 1 ? [fresh[0], fresh[0]] : ls; });
+  PH = N === 4 ? LINES : LINES.flatMap(l => [l.slice(0, 4), l.slice(4)]); // with 8 slices each cut sings half a line
+}
+const plainEdge = (A, B) => (Math.cos(A) >= 0 && Math.sin(A) > 1e-9) || (Math.cos(B) <= 0 && Math.sin(B) > 1e-9); // a cut face turned away while its edge faces her
+for (const n of [8, 4]) {
+  setSlices(n); let lo = 0, hi = N;
+  for (const i of ORDER) { if (i === lo) lo++; else if (i === hi - 1) hi--; else lo = NaN; console.assert(lo === hi || !plainEdge(lineAt(lo), lineAt(hi)), 'rest pose', n, lo, hi); }
+  console.assert(lo === hi && PH.length === N, 'cut order', n);
+}
+console.assert(JSON.stringify(CHOPS) === '[[0,1],[2,2],[3,3],[2,3]]', 'chops');
+
+// ---------- parent settings, kept only in this browser ----------
+const KEY = 'cake-party-settings';
+const DEF = { cakes: 3, slices: 4, insides: Object.keys(INSIDES), volume: 70, calm: matchMedia('(prefers-reduced-motion: reduce)').matches, kidname: '', bday: '' };
+function clean(o) { // anything read back from storage or the form is checked before use
+  o = o && typeof o === 'object' ? o : {};
+  const ins = Array.isArray(o.insides) ? [...new Set(o.insides.filter(k => Object.hasOwn(INSIDES, k)))] : [];
+  const vol = o.volume === undefined || o.volume === null || o.volume === '' ? NaN : +o.volume;
+  return { cakes: Math.min(5, Math.max(1, Math.round(+o.cakes) || DEF.cakes)), slices: +o.slices === 8 ? 8 : 4, insides: ins.length ? ins : DEF.insides,
+    volume: Number.isFinite(vol) ? Math.min(100, Math.max(0, vol)) : DEF.volume, calm: typeof o.calm === 'boolean' ? o.calm : DEF.calm,
+    kidname: typeof o.kidname === 'string' ? o.kidname.trim().slice(0, 16) : '', bday: /^\d{4}-\d{2}-\d{2}$/.test(o.bday) ? o.bday : '' };
+}
+function bdayAge(bday, today) { // the age she turns, during the week around her birthday; 0 otherwise
+  if (!bday) return 0;
+  const [by, bm, bd] = bday.split('-').map(Number), Y = today.getFullYear();
+  for (const y of [Y - 1, Y, Y + 1]) if (Math.abs(today - new Date(y, bm - 1, bd)) <= 3.5 * 864e5) return Math.max(0, y - by);
+  return 0;
+}
+{ const d = clean({}), c = clean({ cakes: 9, slices: '8', insides: ['mint', 'nope', 'mint'], volume: '30', kidname: '  Sam  ', bday: 'soon' });
+  console.assert(d.cakes === 3 && d.slices === 4 && d.insides.length === 6 && d.volume === 70 && d.kidname === '' && d.bday === '', 'settings defaults');
+  console.assert(c.cakes === 5 && c.slices === 8 && c.insides.join() === 'mint' && c.volume === 30 && c.kidname === 'Sam' && c.bday === '', 'settings clean');
+  console.assert(bdayAge('2021-03-10', new Date(2024, 2, 12)) === 3 && bdayAge('2021-03-10', new Date(2024, 2, 20)) === 0 && bdayAge('2020-12-30', new Date(2024, 0, 1)) === 3, 'birthday week'); }
+function load() { try { return clean(JSON.parse(localStorage.getItem(KEY))); } catch { return clean(null); } }
+function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} }
+let S = load(), calm, age = 0;
+function apply() { calm = S.calm ? 0.3 : 1; age = bdayAge(S.bday, new Date()); if (vol) vol.gain.value = 0.5 * S.volume / 100; }
+
+// ---------- layout ----------
+let W, H, R, HC, cx, cy, ty, plates;
+function layout() {
+  const d = devicePixelRatio || 1;
+  W = innerWidth; H = innerHeight; cv.width = W * d; cv.height = H * d;
+  R = Math.min(W * 0.17, H * 0.24); HC = R * 0.55; cx = W / 2; ty = H * 0.5; cy = H * 0.62 - HC;
+  const fr = R * 0.36, r = Math.min(W * 0.07, R * 0.5);
+  plates = [0.1, 0.26, 0.74, 0.9].map(f => ({ x: W * f, y: ty + H * 0.13, r, fr, fy: ty - fr * 1.45 }));
+}
+addEventListener('resize', layout); layout();
+
+// ---------- sound (synthesised, no files) ----------
+let ac, out, vol, noise, lastDing = 0;
+const hz = m => 440 * 2 ** ((m - 69) / 12);
+function audio() {
+  if (ac) return ac.state === 'suspended' && ac.resume();
+  ac = new AudioContext(); out = ac.createDynamicsCompressor();
+  vol = ac.createGain(); out.connect(vol).connect(ac.destination); apply(); // the volume setting tops out at 0.5, through a limiter
+  noise = ac.createBuffer(1, ac.sampleRate * 0.3, ac.sampleRate);
+  noise.getChannelData(0).forEach((_, i, d) => d[i] = Math.random() * 2 - 1);
+}
+function tone(f, dur, { type = 'triangle', vol = 0.3, to, from, vib, lp, at = 0 } = {}) {
+  if (!ac) return;
+  const t = ac.currentTime + at, o = ac.createOscillator(), e = ac.createGain();
+  o.type = type; o.frequency.setValueAtTime(f * (from || 1), t);
+  if (from) o.frequency.exponentialRampToValueAtTime(f, t + 0.07);
+  if (to) o.frequency.exponentialRampToValueAtTime(to, t + dur);
+  if (vib) { const l = ac.createOscillator(), d = ac.createGain(); l.frequency.value = vib; d.gain.value = f * 0.015; l.connect(d).connect(o.frequency); l.start(t); l.stop(t + dur); }
+  let src = o; if (lp) { src = ac.createBiquadFilter(); src.frequency.value = lp; o.connect(src); }
+  e.gain.setValueAtTime(0.0001, t); e.gain.exponentialRampToValueAtTime(vol, t + 0.015); e.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  src.connect(e).connect(out); o.start(t); o.stop(t + dur + 0.02);
+}
+function swish(at, dur = 0.22, f0 = 700, f1 = 2800, vol = 0.6) {
+  if (!ac) return;
+  const t = ac.currentTime + at, s = ac.createBufferSource(), f = ac.createBiquadFilter(), e = ac.createGain();
+  s.buffer = noise; s.loop = true; f.type = 'bandpass'; f.Q.value = 1.5;
+  f.frequency.setValueAtTime(f0, t); f.frequency.exponentialRampToValueAtTime(f1, t + dur * 0.8);
+  e.gain.setValueAtTime(0.0001, t); e.gain.exponentialRampToValueAtTime(vol, t + 0.04); e.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  s.connect(f).connect(e).connect(out); s.start(t); s.stop(t + dur + 0.05);
+}
+function ding() { // G-major pentatonic, so mashing sparkles in tune with the song
+  if (now - lastDing < 0.07) return; lastDing = now;
+  tone(hz([79, 81, 83, 86, 88][Math.random() * 5 | 0]), 0.3, { vol: 0.08 });
+}
+const phLen = k => PH[k].reduce((s, n) => s + n[1], 0) * BEAT;
+const singers = () => !CHOIR || !cake || cake.singer < 0 ? [] : who(cake.singer) === 3 ? [0, 1, 2, 3] : [who(cake.singer)];
+function sing(k) {
+  const all = CHOIR && who(k) === 3;
+  for (const v of CHOIR ? singers().map(j => FRIENDS[j].v) : [MUSICBOX]) { let t = 0; for (const [m, b] of PH[k]) { tone(hz(m + v.oct), b * BEAT + 0.2, { ...v, at: t, vol: v.vol * (all ? 0.6 : 1) }); t += b * BEAT; } }
+}
+function yay(j, at) { const v = FRIENDS[j].v; tone(hz(62 + v.oct), 0.14, { ...v, at }); tone(hz(67 + v.oct), 0.35, { ...v, at: at + 0.13 }); }
+function mmm(j) { const v = FRIENDS[j].v; tone(hz(67 + v.oct), 0.18, v); tone(hz(71 + v.oct), 0.4, { ...v, at: 0.16 }); }
+function nom() { tone(hz(67), 0.1, { type: 'sine', to: hz(60), vol: 0.2 }); }
+function hooray() { [67, 71, 74, 79, 83].forEach((m, i) => tone(hz(m + 12), 0.5, { at: 0.12 * i, vol: 0.16 })); }
+function giggle() { [86, 83, 86, 83].forEach((m, i) => tone(hz(m), 0.08, { type: 'sine', vib: 14, at: i * 0.09, vol: 0.1 })); }
+function tada() { [67, 71, 74].forEach((m, i) => tone(hz(m + 12), 0.2, { at: i * 0.06, vol: 0.14 })); tone(hz(91), 0.7, { at: 0.2, vol: 0.16 }); }
+function byeSong() { // each friend calls "bye-bye" in its own voice, then a soft music-box lullaby
+  FRIENDS.forEach((f, j) => { tone(hz(67 + f.v.oct), 0.25, { ...f.v, at: 0.3 + j * 0.45 }); tone(hz(64 + f.v.oct), 0.45, { ...f.v, at: 0.55 + j * 0.45 }); });
+  [79, 76, 72, 74, 71, 67].forEach((m, i) => tone(hz(m), 0.9, { type: 'sine', at: 4.5 + i * 0.6, vol: 0.07 }));
+}
+
+// ---------- game state ----------
+let now = 0, last = performance.now() / 1000, dt = 0, state, st, cake = null, cands = [], pickI = 0, lastBounce = -1, slices = [], parts = [];
+let giggleAt = -9, partyAt = -99, cakesDone = 0, lastInput = 0, idleAt = 0, gateAt = null, escAt = null;
+const passed = (t0, x) => now - dt - t0 <= x && now - t0 > x; // true on the one frame the clock crosses t0 + x
+function makeCake(ins, fr) { // mix and match: inside x frosting colour x frosting style x topping x fruit, and now and then a piñata
+  const topping = pickOne(TOPPINGS);
+  return { n: 0, lo: 0, hi: N, squashAt: -9, hopAt: -9, blow: Infinity, singer: -1, singAt: -99, cuts: 0, wrap: pickOne(WRAP), pinata: Math.random() < 0.25,
+    th: { ...fr, layers: INSIDES[ins].layers, fill: INSIDES[ins].fill || fr.cream, style: pickOne(STYLES), topping, fruit: pickOne(FRUITS) },
+    spr: Array.from({ length: { sprinkles: 70, stars: 36, buttons: 24, hearts: 28 }[topping] }, (_, i) => ({ r: Math.sqrt(Math.random()) * 0.82, a: Math.random() * TAU, o: Math.random() * TAU, c: i })) };
+}
+function startSession() { cakesDone = 0; slices = []; apply(); startPick(); }
+function startPick() { // three different cakes pop up in front of her
+  setSlices(S.slices);
+  const ins = shuffle(S.insides), fr = shuffle(FROST);
+  cands = [0, 1, 2].map(i => makeCake(ins[i % ins.length], fr[i]));
+  state = 'pick'; st = now; lastBounce = -1;
+}
+const bouncing = () => Math.max(0, Math.floor((now - st - 0.5) / 1.4)) % 3; // the one any key would pick
+const slot = i => [cx + (i - 1) * R * 1.45, H * 0.845]; // where each picture cake sits (bottom middle)
+function choose(i) {
+  pickI = i < 0 ? bouncing() : i; cake = cands[pickI]; state = 'picked'; st = now;
+  const [x, y] = slot(pickI); burst(x, y - HC * 0.4, 20, ['#fff', '#ffd43b', ...CONF], 320, 'star', 150);
+  tada(); swish(0.1, 0.5, 500, 1800, 0.35); FRIENDS.forEach((_, j) => yay(j, 0.35 + j * 0.06));
+}
+function reveal() { // peek-a-boo: the lid pops off with a boing and the cake rises out of the box
+  state = 'reveal'; st = now; slices = []; cake.squashAt = now + 0.87;
+  tone(250, 0.3, { type: 'sine', to: 800, vol: 0.14 }); tone(700, 0.3, { type: 'sine', to: 220, at: 0.28, vol: 0.1 });
+}
+const rimAt = a => [cx + R * Math.cos(a), cy + R * K * Math.sin(a)];
+function blow() { // any press is a big breath: flames out, smoke curls, friends cheer
+  state = 'blowing'; st = now; cake.blow = now; swish(0, 0.7, 350, 1300, 0.7);
+  for (let i = 0; i < N; i++) { const a = lineAt(i + 0.5); burst(cx + 0.36 * R * Math.cos(a), cy + 0.36 * R * K * Math.sin(a) - R * 0.36, 5, ['#adb5bd', '#ced4da', '#dee2e6'], 50, 'puff', -90); }
+  FRIENDS.forEach((_, j) => yay(j, 0.5 + j * 0.07));
+}
+function cut() { state = 'cutting'; st = now; cake.singer = cake.n; cake.singAt = now; cake.cuts = 0; sing(cake.n); swish(0.02); swish(BEAT + 0.02); }
+function chop(j) {
+  const a = lineAt(CHOPS[cake.singer][j]), [x, y] = rimAt(a);
+  cake.cuts = j + 1; cake.squashAt = now;
+  burst(x, y + (Math.sin(a) > 0 ? HC * 0.3 : 0), 8, [cake.th.top, ...cake.th.layers], 160, 'bit');
+  tone(240, 0.14, { type: 'sine', to: 120, vol: 0.2 });
+}
+function pull() { // the cut slice slides out towards her, turning (if it must) so a layered cut face shows at once
+  const k = cake.n, i = ORDER[k], f = who(k), dir = plates[f].x > cx ? 1 : -1, m = lineAt(i + 0.5);
+  const show = Math.cos(lineAt(i)) >= 0 && Math.cos(lineAt(i + 1)) <= 0 ? dir * Math.max(W1, Math.PI / 3) : 0; // neither cut face would face her yet
+  let spin = ((((dir < 0 ? 0 : Math.PI) - m - show) * dir) % TAU + TAU) % TAU * dir; // on to its landing pose, tip towards the cake
+  if (Math.abs(spin) < Math.PI - 1e-6 && calm === 1) spin += dir * TAU;
+  slices.push({ i, f, c: cake, t0: now, dir, show, spin, bites: 0, biteAt: -9 });
+  if (i === cake.lo) cake.lo++; else cake.hi--;
+  cake.n++; cake.squashAt = now;
+  for (const l of [i, i + 1]) { const [x, y] = rimAt(lineAt(l)); burst((x + cx) / 2, (y + cy) / 2 + HC * 0.6, 12, cake.th.layers, 200, 'bit'); }
+  tone(320, 0.18, { type: 'sine', to: 900, vol: 0.12 });
+  if (cake.pinata && k === 0) { // surprise: a piñata cake spills candies on the first cut
+    burst(cx + 0.3 * R * Math.cos(m), cy + 0.3 * R * K * Math.sin(m) + HC * 0.5, 28, CONF.slice(0, 5), 380, 'candy', 700);
+    swish(0.05, 0.5, 400, 2400, 0.35); [72, 76, 79, 84].forEach((n, j) => tone(hz(n), 0.15, { type: 'sine', at: 0.05 + j * 0.06, vol: 0.1 }));
+  }
+}
+function party() { state = 'party'; st = now; partyAt = now; cakesDone++; hooray(); FRIENDS.forEach((_, j) => yay(j, 0.45 + j * 0.08)); }
+function bye() { state = 'bye'; st = now; byeSong(); } // the natural ending: the friends wave, then everyone rests
+function go(x, y, aimed) { // every input lands here: always a sparkle, and the next step when there is one
+  lastInput = now;
+  burst(x, y, state === 'bye' ? 4 : 10, ['#fff', '#ffd43b', '#ff8fbd'], state === 'bye' ? 120 : 280, 'star', 200);
+  if (state === 'pick' && now - st > 0.4) return choose(aimed ? [0, 1, 2].findIndex(i => { const [sx, sy] = slot(i); return Math.hypot(x - sx, y - sy + HC * 0.35) < R * 0.8; }) : -1);
+  if (state === 'gift' && now - st > 0.8) return reveal();
+  if (state === 'candles') return blow();
+  if (state === 'ready') return cut();
+  if (state !== 'bye') ding();
+}
+
+// ---------- toddler-proof input ----------
+let armed = false, travel = 0, trail = 0, lx, ly;
+function full() { document.documentElement.requestFullscreen?.().then(() => navigator.keyboard?.lock()).catch(() => {}); }
+function arm() { // needs a real user activation: starts sound, full screen and keyboard lock once
+  if (!navigator.userActivation?.isActive) return;
+  audio();
+  if (armed) return; armed = true; hint.style.opacity = 0; full();
+}
+function leaveFull() { navigator.keyboard?.unlock(); if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); }
+const inCorner = (x, y) => x < 90 && y < 90;
+addEventListener('pointerdown', e => {
+  if (!corner.hidden) return;
+  e.preventDefault(); arm();
+  if (inCorner(e.clientX, e.clientY)) { gateAt = now; lastInput = now; return burst(e.clientX, e.clientY, 6, ['#fff', '#ffd43b'], 160, 'star', 200); } // the grown-up gate: hold 3 s
+  go(e.clientX, e.clientY, true);
+});
+addEventListener('pointerup', () => { gateAt = null; if (corner.hidden) arm(); });
+addEventListener('pointercancel', () => { gateAt = null; });
+const ROWS = ['1234567890', 'QWERTYUIOP', 'ASDFGHJKL', 'ZXCVBNM'];
+function keySpot(code) { // sparkles appear where the key sits on the keyboard: Q top-left, M bottom-right, space bar bottom-middle
+  if (code === 'Space') return [W / 2, H * 0.9];
+  const ch = code.replace(/^(Key|Digit)/, ''), r = ch.length === 1 ? ROWS.findIndex(row => row.includes(ch)) : -1;
+  return r < 0 ? [cx + (Math.random() - 0.5) * R * 2, cy] : [W * (0.06 + 0.88 * (ROWS[r].indexOf(ch) + r * 0.35 + 0.5) / 11), H * (0.14 + r * 0.22)];
+}
+addEventListener('keydown', e => {
+  if (!corner.hidden) { if (e.key === 'Escape') closeCorner(); return; } // the parent corner types normally
+  e.preventDefault();
+  if (e.code === 'Escape' && !e.repeat) escAt = now;
+  if (e.repeat) return;
+  if (e.ctrlKey && e.shiftKey && e.code === 'KeyP') return openCorner();
+  arm();
+  if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) { lastInput = now; return burst(...keySpot(e.code), 6, ['#fff', '#ffd43b', '#ff8fbd'], 200, 'star', 200); } // modifiers only sparkle, so the grown-up chord doesn't play a turn
+  go(...keySpot(e.code), false);
+});
+addEventListener('keyup', e => { if (e.code === 'Escape') escAt = null; });
+addEventListener('pointermove', e => {
+  if (!corner.hidden) return;
+  const d = lx === undefined ? 0 : Math.hypot(e.clientX - lx, e.clientY - ly); lx = e.clientX; ly = e.clientY;
+  if (!inCorner(lx, ly)) gateAt = null;
+  if ((trail += d) > 40) { trail = 0; burst(lx, ly, 1, ['#fff', '#ffd43b', '#ff8fbd'], 60, 'star', 150); }
+  if ((travel += d) > 700) { travel = 0; go(lx, ly, false); } // ponytail: fixed threshold, make it a parent setting if too eager
+});
+addEventListener('contextmenu', e => e.preventDefault());
+addEventListener('wheel', e => { if (corner.hidden) e.preventDefault(); }, { passive: false });
+
+// ---------- parent corner ----------
+document.getElementById('insides').innerHTML = Object.entries(INSIDES).map(([k, v]) => `<label><input type="checkbox" name="insides" value="${k}"> ${v.label}</label>`).join('');
+function fill() {
+  const f = form.elements;
+  f.cakes.value = S.cakes; f.slices.value = S.slices; f.volume.value = S.volume; f.calm.checked = S.calm; f.kidname.value = S.kidname; f.bday.value = S.bday;
+  for (const b of form.querySelectorAll('[name=insides]')) b.checked = S.insides.includes(b.value);
+}
+function openCorner() { gateAt = null; fill(); corner.hidden = false; }
+function closeCorner() { corner.hidden = true; lastInput = now; }
+form.addEventListener('input', () => {
+  const f = form.elements;
+  S = clean({ cakes: f.cakes.value, slices: f.slices.value, volume: f.volume.value, calm: f.calm.checked, kidname: f.kidname.value, bday: f.bday.value,
+    insides: [...form.querySelectorAll('[name=insides]:checked')].map(b => b.value) });
+  save(); apply();
+  if (!form.querySelector('[name=insides]:checked')) fill(); // at least one kind of cake stays on
+});
+form.addEventListener('submit', e => { e.preventDefault(); closeCorner(); });
+document.getElementById('forget').addEventListener('click', () => { S.kidname = ''; S.bday = ''; save(); apply(); fill(); });
+document.getElementById('restart').addEventListener('click', () => { closeCorner(); audio(); if (!document.fullscreenElement) full(); startSession(); });
+
+// ---------- particles ----------
+function burst(x, y, n, cs, v, k, gr = 900) {
+  for (let i = 0; i < n * calm; i++) {
+    const a = Math.random() * TAU, m = v * (0.3 + Math.random() * 0.7);
+    parts.push({ x, y, vx: Math.cos(a) * m, vy: Math.sin(a) * m - v * 0.5, gr, life: 0, max: 0.7 + Math.random() * 0.6,
+      c: cs[i % cs.length], s: (k === 'star' ? 6 : k === 'candy' ? 6 : 3) + Math.random() * 5, a: Math.random() * TAU, va: (Math.random() - 0.5) * 10, k });
+  }
+  if (parts.length > 600) parts.splice(0, parts.length - 600);
+}
+
+// ---------- drawing ----------
+const star = (x, y, s) => { g.moveTo(x, y - s); g.quadraticCurveTo(x, y, x + s, y); g.quadraticCurveTo(x, y, x, y + s); g.quadraticCurveTo(x, y, x - s, y); g.quadraticCurveTo(x, y, x, y - s); };
+const heart = (x, y, h) => { g.moveTo(x, y + h * 0.9); g.bezierCurveTo(x - h * 1.6, y - h * 0.2, x - h * 0.6, y - h * 1.3, x, y - h * 0.4); g.bezierCurveTo(x + h * 0.6, y - h * 1.3, x + h * 1.6, y - h * 0.2, x, y + h * 0.9); };
+function wedge(A, B, rot, o) { // a cake (or slice) spanning world angles A..B, tip at 0,0, top face at z=0
+  const th = o.th, rk = R * K, full = B - A > TAU - 1e-6, at = a => [R * Math.cos(a), rk * Math.sin(a)];
+  const band = (x, y, z0, z1, f, c) => { g.fillStyle = c; g.beginPath(); g.moveTo(0, z0); g.lineTo(x * f, y * f + z0); g.lineTo(x * f, y * f + z1); g.lineTo(0, z1); g.fill(); };
+  if (!full) for (const [a, n] of [[A, -1], [B, 1]]) { // cut faces showing the layers, only the ones facing us
+    if (Math.cos(a) * n <= 0) continue;
+    const [x, y] = at(a), L = th.layers, u = HC * 0.88 / (L.length * 1.3 - 0.3);
+    band(x, y, 0, HC, 1, th.side); band(x, y, 0, HC * 0.1, 1, th.top);
+    let z = HC * 0.1;
+    L.forEach((c, i) => { band(x, y, z, z + u, 0.93, c); z += u; if (i < L.length - 1) { band(x, y, z, z + u * 0.3, 0.93, th.fill); z += u * 0.3; } });
+    if (o.pinata) [0.3, 0.5, 0.7, 0.86].forEach((f, i) => dot(x * f, y * f + HC * (0.35 + 0.3 * (i % 2)), R * 0.035, CONF[i])); // candies inside
+    band(x, y, 0, HC, 1, `rgba(90,30,60,${0.22 * (1 - Math.max(0, Math.sin(a + n * TAU / 4)))})`);
+  }
+  const shade = g.createLinearGradient(-R, 0, R, 0);
+  [[0, 'rgba(60,20,40,.3)'], [0.3, 'rgba(60,20,40,0)'], [0.42, 'rgba(255,255,255,.3)'], [0.55, 'rgba(255,255,255,0)'], [1, 'rgba(60,20,40,.32)']].forEach(s => shade.addColorStop(...s));
+  for (let k = -1; k <= 2; k++) { // the frosted outside, front half only
+    const s = Math.max(A, k * TAU), e = Math.min(B, k * TAU + Math.PI);
+    if (e <= s) continue;
+    const side = h => { g.beginPath(); g.ellipse(0, 0, R, rk, 0, s, e); g.ellipse(0, h, R, rk, 0, e, s, true); g.closePath(); };
+    side(HC); g.fillStyle = th.side; g.fill();
+    side(HC * 0.13); g.fillStyle = th.top; g.fill();
+    g.strokeStyle = th.top; g.lineCap = 'round';
+    if (th.style === 'drip') for (let j = 0; j < 24; j++) {
+      const a = j * TAU / 24 + rot; if (!inArc(a, s, e)) continue;
+      const [x, y] = at(a); g.lineWidth = Math.max(0.5, R * 0.1 * Math.sin(a));
+      g.beginPath(); g.moveTo(x, y); g.lineTo(x, y + HC * (0.2 + 0.25 * (j * 7 % 5) / 4)); g.stroke();
+    }
+    side(HC); g.fillStyle = shade; g.fill();
+    if (th.style === 'piped') for (let j = 0; j < 36; j++) { const a = j * TAU / 36 + rot; if (inArc(a, s, e)) { const [x, y] = at(a); dot(x, y + HC, R * 0.05, th.cream); } } // a piped border along the bottom
+  }
+  g.beginPath(); // top
+  if (full) g.ellipse(0, 0, R, rk, 0, 0, TAU); else { g.moveTo(0, 0); g.ellipse(0, 0, R, rk, 0, A, B); g.closePath(); }
+  g.fillStyle = th.top; g.fill();
+  g.lineWidth = R * 0.022; g.lineCap = 'round';
+  for (const p of o.spr) { // toppings: sprinkles, star sprinkles, candy buttons or mini hearts
+    const a = p.a + rot; if (!inArc(a, A, B)) continue;
+    const x = p.r * R * Math.cos(a), y = p.r * rk * Math.sin(a), c = th.spr[p.c % th.spr.length];
+    if (th.topping === 'sprinkles') { const dx = Math.cos(p.o) * R * 0.025, dy = Math.sin(p.o) * rk * 0.025; g.strokeStyle = c; g.beginPath(); g.moveTo(x - dx, y - dy); g.lineTo(x + dx, y + dy); g.stroke(); continue; }
+    g.fillStyle = c; g.beginPath();
+    if (th.topping === 'buttons') g.ellipse(x, y, R * 0.04, R * 0.028, 0, 0, TAU); else if (th.topping === 'stars') star(x, y, R * 0.035); else heart(x, y, R * 0.018);
+    g.fill();
+  }
+  const dec = []; // piping, the name plaque, then one fruit and one candle per slice, back to front
+  if (th.style !== 'smooth') for (let j = 0; j < 40; j++) { const a = j * TAU / 40 + rot; if (inArc(a, A, B)) dec.push([Math.sin(a), () => dot(...at(a), R * (th.style === 'piped' ? 0.06 : 0.045), th.cream)]); }
+  if (S.kidname) { const a = TAU * 0.75 - FRONT + rot; if (inArc(a, A, B)) dec.push([0.62 * Math.sin(a) - 0.01, () => plaque(0.62 * R * Math.cos(a), 0.62 * rk * Math.sin(a))]); }
+  for (let i = 0; i < N; i++) {
+    const a = (i + 0.5) * W1 + rot, c = Math.cos(a), s = Math.sin(a); if (!inArc(a, A, B)) continue;
+    dec.push([0.74 * s, () => fruit(0.74 * R * c, 0.74 * rk * s, th.fruit)], [0.36 * s, () => candle(0.36 * R * c, 0.36 * rk * s, i, o.blow)]);
+  }
+  dec.sort((p, q) => p[0] - q[0]).forEach(d => d[1]());
+}
+function plaque(x, y) { // the name on a little sign at the back of the cake, stored only on this laptop
+  const h = R * 0.2, sy = y - R * 0.62;
+  g.font = `bold ${Math.round(R * 0.13)}px system-ui, sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle';
+  const w = g.measureText(S.kidname).width + R * 0.18;
+  g.strokeStyle = '#dee2e6'; g.lineWidth = R * 0.025; g.beginPath(); g.moveTo(x, y); g.lineTo(x, sy); g.stroke();
+  g.beginPath(); g.roundRect(x - w / 2, sy - h / 2, w, h, h / 2); g.fillStyle = '#fff'; g.fill(); g.lineWidth = R * 0.015; g.strokeStyle = '#ff8fbd'; g.stroke();
+  g.fillStyle = '#c2255c'; g.fillText(S.kidname, x, sy + R * 0.005);
+}
+function dot(x, y, r, c) { g.fillStyle = c; g.beginPath(); g.arc(x, y, r, 0, TAU); g.fill(); }
+function fruit(x, y, kind) {
+  const r = R * 0.075;
+  if (kind === 'blueberry') {
+    for (const [dx, dy] of [[-0.6, 0], [0.6, 0], [0, -0.55]]) { dot(x + dx * r, y + (dy - 0.5) * r, r * 0.55, '#364fc7'); dot(x + (dx - 0.18) * r, y + (dy - 0.68) * r, r * 0.15, 'rgba(255,255,255,.55)'); }
+    return;
+  }
+  y -= r * 0.6;
+  if (kind === 'kiwi') { // a kiwi wheel standing on its edge
+    dot(x, y, r * 1.05, '#6b8e23'); dot(x, y, r * 0.9, '#94d82d'); dot(x, y, r * 0.32, '#f4fce3');
+    for (let k = 0; k < 8; k++) dot(x + Math.cos(k * TAU / 8) * r * 0.55, y + Math.sin(k * TAU / 8) * r * 0.55, r * 0.07, '#212529');
+    return;
+  }
+  if (kind === 'strawberry') {
+    g.fillStyle = '#f03e3e'; g.beginPath(); g.moveTo(x, y + r * 1.1);
+    g.bezierCurveTo(x - r * 1.5, y + r * 0.1, x - r * 0.8, y - r, x, y - r * 0.8); g.bezierCurveTo(x + r * 0.8, y - r, x + r * 1.5, y + r * 0.1, x, y + r * 1.1); g.fill();
+    for (const [dx, dy] of [[-0.4, -0.2], [0.35, -0.3], [0, 0.35]]) dot(x + dx * r, y + dy * r, r * 0.09, '#ffe066');
+    g.fillStyle = '#40c057'; for (const s of [-1, 0, 1]) { g.beginPath(); g.ellipse(x + s * r * 0.35, y - r * 0.85, r * 0.35, r * 0.14, s * 0.5, 0, TAU); g.fill(); }
+    return;
+  }
+  dot(x, y, r, '#e8173a'); dot(x - r * 0.35, y - r * 0.35, r * 0.28, 'rgba(255,255,255,.6)');
+  g.fillStyle = '#51cf66'; g.beginPath(); g.ellipse(x + r * 0.2, y - r * 1.05, r * 0.45, r * 0.22, -0.5, 0, TAU); g.fill();
+}
+function candle(x, y, i, blow) {
+  const w = R * 0.06, h = R * 0.3, out = now - blow;
+  g.fillStyle = CONF[i % CONF.length]; g.beginPath(); g.roundRect(x - w / 2, y - h, w, h, w / 3); g.fill();
+  g.strokeStyle = 'rgba(255,255,255,.85)'; g.lineWidth = w * 0.3; g.beginPath();
+  for (let k = 1; k < 4; k++) { g.moveTo(x - w / 2, y - h * k / 4 + w * 0.3); g.lineTo(x + w / 2, y - h * k / 4 - w * 0.3); }
+  g.stroke();
+  g.strokeStyle = '#495057'; g.lineWidth = w * 0.2; g.beginPath(); g.moveTo(x, y - h); g.lineTo(x, y - h - w * 0.5); g.stroke();
+  if (out > 0.25) return;
+  const f = (out > 0 ? 1 - out / 0.25 : 1) * (1 + 0.1 * Math.sin(now * 23 + i * 2)), fy = y - h - w * 0.3;
+  const gl = g.createRadialGradient(x, fy - w, 0, x, fy - w, w * 5 * f); gl.addColorStop(0, 'rgba(255,212,59,.45)'); gl.addColorStop(1, 'rgba(255,212,59,0)');
+  g.fillStyle = gl; g.fillRect(x - w * 5, fy - w * 6, w * 10, w * 10);
+  const drop = (s, c) => { g.fillStyle = c; g.beginPath(); g.moveTo(x, fy - w * 3 * s); g.quadraticCurveTo(x + w * 1.2 * s, fy - w * 0.3 * s, x, fy + w * 0.2 * s); g.quadraticCurveTo(x - w * 1.2 * s, fy - w * 0.3 * s, x, fy - w * 3 * s); g.fill(); };
+  drop(f, '#ff922b'); drop(f * 0.6, '#ffe066');
+}
+function grooves() { // where the knife went in: across the top, and down the side when that side faces her
+  g.lineCap = g.lineJoin = 'round';
+  for (const l of new Set(CHOPS[cake.singer].slice(0, cake.cuts))) {
+    const a = lineAt(l), x = R * Math.cos(a), y = R * K * Math.sin(a);
+    g.strokeStyle = 'rgba(60,20,40,.6)'; g.lineWidth = R * 0.03; g.beginPath(); g.moveTo(0, 0); g.lineTo(x, y); if (Math.sin(a) > 0) g.lineTo(x, y + HC); g.stroke();
+    g.strokeStyle = 'rgba(255,255,255,.7)'; g.lineWidth = R * 0.01; g.beginPath(); g.moveTo(0, -R * 0.012); g.lineTo(x, y - R * 0.012); g.stroke();
+  }
+}
+function put(x, y, s, q, ax = 0, ay = 0) { // origin at x,y; squash (q>0) / stretch (q<0) around the bottom below local (ax, ay)
+  g.save(); g.translate(x + ax * s, y + (HC + ay) * s); g.scale(s * (1 + q * 0.6), s * (1 - q)); g.translate(-ax, -HC - ay);
+}
+function ell(x, y, rx, ry, c) { g.fillStyle = c; g.beginPath(); g.ellipse(x, y, rx, ry, 0, 0, TAU); g.fill(); }
+function plate(x, y, r) {
+  ell(x, y + r * 0.12, r * 1.08, r * K * 1.08, 'rgba(20,90,70,.14)'); ell(x, y + r * 0.06, r, r * K, '#d5dee8'); ell(x, y, r, r * K, '#fff');
+  g.strokeStyle = '#e6edf3'; g.lineWidth = 2; g.beginPath(); g.ellipse(x, y, r * 0.72, r * 0.72 * K, 0, 0, TAU); g.stroke();
+}
+function stand() { // a thick cake board with a blue rim
+  const py = cy + HC, r = R * 1.18, t = R * 0.09;
+  ell(cx, py + t + r * 0.06, r * 1.04, r * K * 1.04, 'rgba(20,90,70,.16)');
+  ell(cx, py + t, r, r * K, '#8cc3ec'); g.fillRect(cx - r, py, 2 * r, t); ell(cx, py, r, r * K, '#fff');
+  g.strokeStyle = '#e6edf3'; g.lineWidth = 2; g.beginPath(); g.ellipse(cx, py, r * 0.8, r * 0.8 * K, 0, 0, TAU); g.stroke();
+}
+function knife() { // a chunky toy knife with a rounded blade and a smiley handle
+  const b = (now - st) / BEAT, bh = R * 0.26, hover = -R * 0.34 + Math.sin(now * 3) * R * 0.03;
+  let ch, j = 0, d = hover, al = 1;
+  if (state === 'ready') { ch = CHOPS[cake.n]; al = clamp((now - st) / 0.3); }
+  else if (state === 'cutting' && b < 2.2) { // each chop bottoms out just after its note: down the side at the front, into the top at the back
+    ch = CHOPS[cake.singer]; j = b < 1 ? 0 : 1;
+    const p = b - j, deep = Math.sin(lineAt(ch[j])) > 0 ? HC * 0.95 : R * 0.28;
+    d += (deep - hover) * (p < 0.22 ? ease(p / 0.22) : 1 - ease(clamp((p - 0.22) / 0.55)));
+    al = Math.min(ch[0] === ch[1] ? 1 : clamp(Math.abs(b - 1) / 0.1), clamp((2.2 - b) / 0.4));
+  } else return;
+  const a = lineAt(ch[j]), px = R * Math.cos(a), py = R * K * Math.sin(a), L = Math.hypot(px, py);
+  g.save(); g.globalAlpha = al; g.transform(px / L, py / L, 0, 1, cx, cy); // local x runs along the cut line, local y stays vertical
+  g.save(); g.beginPath(); g.rect(-L, -3 * R, 2 * L, 3 * R); g.rect(L, -3 * R, 3 * R, (py > 0 ? 6 : 3) * R); g.clip(); // blade hides inside (and behind) the cake
+  g.beginPath(); g.roundRect(L * 0.12, d - bh, L * 0.88 + R * 0.4, bh, [bh / 2, 0, 0, bh / 2]);
+  g.fillStyle = '#dde6ff'; g.fill(); g.lineWidth = R * 0.02; g.strokeStyle = '#8ea4ff'; g.stroke();
+  g.strokeStyle = '#fff'; g.beginPath(); g.moveTo(L * 0.25, d - bh * 0.7); g.lineTo(L + R * 0.3, d - bh * 0.7); g.stroke();
+  g.restore();
+  const hx = L + R * 0.36, hw = R * 0.56, hh = bh * 1.4, hy = d - bh * 1.15, fx = hx + hw * 0.5, fy = hy + hh * 0.45;
+  g.beginPath(); g.roundRect(hx, hy, hw, hh, hh / 2); g.fillStyle = cake.th.handle; g.fill(); g.strokeStyle = 'rgba(60,30,50,.4)'; g.stroke();
+  dot(fx - hh * 0.22, fy - hh * 0.05, hh * 0.08, '#3b2a33'); dot(fx + hh * 0.22, fy - hh * 0.05, hh * 0.08, '#3b2a33');
+  g.strokeStyle = '#3b2a33'; g.lineWidth = hh * 0.07; g.beginPath(); g.arc(fx, fy + hh * 0.05, hh * 0.16, 0.2 * Math.PI, 0.8 * Math.PI); g.stroke();
+  g.restore();
+}
+function drawSlice(s) { // slice clock in beats from the pull: slides out and shows its layers 0-0.5, holds, flies 1.2-2, lands at 2, then gets eaten
+  const p = plates[s.f], u = (now - s.t0) / BEAT, ps = p.r / R * 1.25, f = [1, 0.68, 0.38, 0][s.bites], m0 = lineAt(s.i + 0.5);
+  const c0 = [cx + 0.6 * R * Math.cos(m0), cy + 0.6 * R * K * Math.sin(m0)], c1 = [c0[0] + 0.3 * R * Math.cos(m0), c0[1] + R * 0.8], c2 = [p.x, p.y - HC * ps * f];
+  let c = c2, sc = ps * f, q = 0.3 * wob(now - s.t0 - 2 * BEAT) + 0.25 * wob(now - s.biteAt), turn = s.show + s.spin; // c: where the slice's middle goes
+  if (u < 1.2) { const e = ease(clamp(u / 0.5)); c = [c0[0] + (c1[0] - c0[0]) * e, c0[1] + (c1[1] - c0[1]) * e - Math.sin(Math.PI * e) * R * 0.12]; sc = 1 + 0.04 * e; q = -0.08 * Math.sin(Math.PI * e); turn = s.show * e; }
+  else if (u < 2) { const e = ease((u - 1.2) / 0.8); c = [c1[0] + (c2[0] - c1[0]) * e, c1[1] + (c2[1] - c1[1]) * e - Math.sin(Math.PI * e) * H * 0.16]; sc = 1.04 + (ps * f - 1.04) * e; q = -0.15 * Math.sin(Math.PI * e); turn = s.show + s.spin * e; }
+  const rot = FRONT + turn, m = lineAt(s.i + 0.5) + turn, ax = 0.6 * R * Math.cos(m), ay = 0.6 * R * K * Math.sin(m); // turn about its own middle
+  put(c[0] - ax * sc, c[1] - ay * sc, sc, q, ax, ay); wedge(s.i * W1 + rot, (s.i + 1) * W1 + rot, rot, s.c); g.restore();
+}
+function present(front) { // a bright wrapped present: it wobbles and giggles, then the lid pops off and the cake rises out
+  const t = now - st, [col, rib] = cake.wrap, w = R * 0.72, h = R * 0.8, d = w * K, rev = state === 'reveal';
+  let y = cy + HC, ang = 0, q = 0, al = 1;
+  if (rev) { const f = clamp((t - 0.38) / 0.27); al = 1 - f; y += f * f * R * 0.3; } // the empty box sinks away once the cake is out
+  else {
+    const land = clamp((t - 0.3) / 0.45), gt = now - giggleAt;
+    y -= H * (1 - land * land) + (gt < 0.35 ? Math.sin(Math.PI * gt / 0.35) * R * 0.22 * calm : 0);
+    ang = gt < 1.2 ? 0.14 * Math.sin(gt * 36) * Math.exp(-gt * 4) * calm : 0;
+    q = 0.25 * wob(t - 0.75) + 0.03 * Math.sin(now * 4);
+  }
+  if (al <= 0) return;
+  const poly = (pts, c) => { g.fillStyle = c; g.beginPath(); pts.forEach(([x, y]) => g.lineTo(x, y)); g.fill(); };
+  const dots = pts => pts.forEach(([x, y]) => { g.beginPath(); g.ellipse(x, y, w * 0.08, w * 0.065, 0, 0, TAU); g.fill(); });
+  const top = [[-w, -h], [0, -d - h], [w, -h], [0, d - h]], T = (a, b) => [-w + (a + b) * w, -h + (b - a) * d];
+  g.save(); g.translate(cx, y); g.rotate(ang); g.scale(1 + q * 0.6, 1 - q); g.globalAlpha = al;
+  if (rev && !front) { poly(top, col); poly(top, 'rgba(40,0,60,.5)'); g.restore(); return; } // the open box, behind the rising cake
+  for (const s of [-1, 1]) { // two walls, polka dots, a ribbon band
+    const P = (u, v) => s < 0 ? [-w * (1 - u), u * d - v * h] : [w * u, d * (1 - u) - v * h];
+    poly([P(0, 0), P(1, 0), P(1, 1), P(0, 1)], col); if (s > 0) poly([P(0, 0), P(1, 0), P(1, 1), P(0, 1)], 'rgba(0,0,0,.13)');
+    g.fillStyle = 'rgba(255,255,255,.85)'; dots([[0.2, 0.2], [0.8, 0.36], [0.2, 0.56], [0.8, 0.74], [0.24, 0.9]].map(([u, v]) => P(u, v)));
+    g.strokeStyle = rib; g.lineWidth = w * 0.2; g.lineCap = 'butt'; g.beginPath(); g.moveTo(...P(0.5, 0)); g.lineTo(...P(0.5, 1)); g.stroke();
+  }
+  if (S.kidname) { // a gift tag with the name, hanging on the ribbon
+    g.save(); g.translate(-w * 0.5, d * 0.5 - h * 0.42); g.rotate(Math.atan2(d, w));
+    g.font = `bold ${Math.round(w * 0.15)}px system-ui, sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle';
+    const tw = g.measureText(S.kidname).width + w * 0.2, th = w * 0.28;
+    g.beginPath(); g.roundRect(-tw / 2, -th / 2, tw, th, th * 0.3); g.fillStyle = '#fff'; g.fill(); g.lineWidth = w * 0.02; g.strokeStyle = rib; g.stroke();
+    g.fillStyle = '#c2255c'; g.fillText(S.kidname, 0, w * 0.005); g.restore();
+  }
+  if (rev) { const f = ease(clamp(t / 0.5)); g.globalAlpha = 1 - clamp((t - 0.3) / 0.3); g.translate(R * 0.55 * f, -R * 1.3 * f); g.rotate(0.9 * f); } // the lid flies off
+  poly(top, col); poly(top, 'rgba(255,255,255,.2)');
+  g.fillStyle = 'rgba(255,255,255,.85)'; dots([T(0.22, 0.22), T(0.78, 0.22), T(0.22, 0.78), T(0.78, 0.78)]);
+  g.strokeStyle = rib; g.lineWidth = w * 0.18; g.beginPath(); g.moveTo(...T(0.5, 0)); g.lineTo(...T(0.5, 1)); g.moveTo(...T(0, 0.5)); g.lineTo(...T(1, 0.5)); g.stroke();
+  g.fillStyle = rib; for (const s of [-1, 1]) { g.beginPath(); g.ellipse(s * w * 0.26, -h - w * 0.16, w * 0.27, w * 0.16, s * 0.45, 0, TAU); g.fill(); } // the bow
+  for (const s of [-1, 1]) { g.fillStyle = 'rgba(0,0,0,.18)'; g.beginPath(); g.ellipse(s * w * 0.28, -h - w * 0.17, w * 0.12, w * 0.06, s * 0.45, 0, TAU); g.fill(); }
+  dot(0, -h - w * 0.08, w * 0.11, rib);
+  g.restore();
+}
+function candidates() { // three picture cakes on plates in front of her; the bouncing one is what any key picks
+  const t = now - st, bi = bouncing(), grow = i => 0.62 * ease(clamp((t - i * 0.12) / 0.4));
+  cands.forEach((_, i) => { const ds = state === 'picked' ? 0.62 * (1 - ease(clamp(t / 0.5))) : grow(i); if (ds > 0.01) plate(...slot(i), R * ds * 1.25); });
+  cands.forEach((c, i) => {
+    let [x, yb] = slot(i), s = grow(i), q = 0.2 * wob(t - i * 0.12 - 0.4), hop = 0;
+    if (state === 'picked') {
+      if (i === pickI) { const e = ease(clamp(t / 0.7)); x += (cx - x) * e; yb += (cy + HC - yb) * e - Math.sin(Math.PI * e) * R * 0.7; s = 0.62 - 0.27 * e; q = 0; } // hops onto the stand
+      else s = 0.62 * (1 - ease(clamp(t / 0.3)));
+    } else if (i === bi && t > 0.5) {
+      const u = ((t - 0.5) % 1.4) / 1.4; hop = Math.abs(Math.sin(u * TAU)) * R * 0.2 * calm; q -= 0.06 * Math.abs(Math.sin(u * TAU));
+      const gl = g.createRadialGradient(x, yb, 0, x, yb, R * 0.95); gl.addColorStop(0, 'rgba(255,236,153,.9)'); gl.addColorStop(1, 'rgba(255,236,153,0)');
+      g.fillStyle = gl; g.beginPath(); g.ellipse(x, yb, R * 0.95, R * 0.95 * K, 0, 0, TAU); g.fill();
+    }
+    if (s < 0.01) return;
+    put(x, yb - HC * s - hop, s, q); wedge(FRONT, FRONT + TAU, FRONT, c); g.restore();
+  });
+}
+
+// ---------- party friends ----------
+function mood(j) {
+  const t = now - st, s = slices.findLast(s => s.f === j), ts = cake ? now - cake.singAt : -1, song = !!cake && cake.singer >= 0 && ts >= 0 && ts < phLen(cake.singer);
+  const sing = song && singers().includes(j) ? mouth(cake.singer, ts) : 0;
+  let chomp = 0; if (s?.landAt) for (const b of BITES) chomp = Math.max(chomp, 1 - Math.abs(now - s.landAt - b * BEAT) / 0.18);
+  const cheer = (state === 'party' && t < 3) || (state === 'picked' && t > 0.2) || (state === 'blowing' && t > 0.4) || (state === 'reveal' && t > 0.6);
+  const sleep = state === 'bye' && t > 6, wave = state === 'bye' && !sleep && t > 0.3;
+  return { sing, open: Math.max(sing, chomp), lean: clamp(chomp), cheer, wave, sleep,
+    happy: !sleep && (cheer || wave || state === 'party' || (state === 'pick' && now - partyAt < 6) || (s?.gone && now - s.goneAt < 2.5)),
+    turn: state === 'ready' && (who(cake.n) === j || who(cake.n) === 3), sway: song ? 0.06 * Math.sin(Math.PI * ts / BEAT) * calm : 0 }; // the whole table sways to the song
+}
+function mouth(k, ts) { let t = 0; for (const [, b] of PH[k]) { if (ts < t + b * BEAT) return 0.35 + 0.65 * Math.exp(-(ts - t) * 5); t += b * BEAT; } return 0; }
+function blob(x, y, rx, ry, c, rot = 0, line = true) {
+  g.fillStyle = c; g.beginPath(); g.ellipse(x, y, rx, ry, rot, 0, TAU); g.fill();
+  if (line) { g.strokeStyle = 'rgba(70,40,60,.4)'; g.stroke(); }
+}
+function tri(pts, c, line = true) {
+  g.fillStyle = c; g.beginPath(); pts.forEach(([x, y]) => g.lineTo(x, y)); g.closePath(); g.fill();
+  if (line) { g.strokeStyle = 'rgba(70,40,60,.4)'; g.stroke(); }
+}
+function friend(j, p) {
+  const f = FRIENDS[j], m = p.m, r = p.fr, x = p.x;
+  const y = p.hy = p.fy - (m.cheer ? Math.abs(Math.sin(now * 7 + j)) * r * 0.3 * calm : 0) - m.sing * r * 0.08 + m.lean * r * 0.15 + (m.turn ? Math.sin(now * 5) * r * 0.05 : 0) + (m.sleep ? Math.sin(now * 1.5 + j) * r * 0.03 : 0);
+  if (m.sing) { // a soft spotlight on whoever is singing, so she can see who the slice is for
+    const gl = g.createRadialGradient(x, y, r * 0.5, x, y, r * 2.3); gl.addColorStop(0, 'rgba(255,241,168,.95)'); gl.addColorStop(1, 'rgba(255,241,168,0)');
+    g.fillStyle = gl; g.fillRect(x - r * 2.3, y - r * 2.3, r * 4.6, r * 4.6);
+  }
+  g.lineWidth = r * 0.06;
+  blob(x, y + r * 1.35, r * 0.95, r * 0.9, f.fur); // body; the table hides the bottom
+  for (const s of [-1, 1]) {
+    if (f.ear === 'round') { blob(x + s * r * 0.72, y - r * 0.7, r * 0.3, r * 0.3, f.fur); blob(x + s * r * 0.72, y - r * 0.7, r * 0.15, r * 0.15, f.face, 0, false); }
+    if (f.ear === 'long') { const w = s * (0.15 + 0.05 * Math.sin(now * 3 + s)); blob(x + s * r * 0.38, y - r * 1.25, r * 0.22, r * 0.62, f.fur, w); blob(x + s * r * 0.38, y - r * 1.2, r * 0.1, r * 0.45, '#ffc2d8', w, false); }
+    if (f.ear === 'point') { tri([[x + s * r * 0.92, y - r * 0.2], [x + s * r * 0.8, y - r * 1.2], [x + s * r * 0.2, y - r * 0.85]], f.fur); tri([[x + s * r * 0.78, y - r * 0.4], [x + s * r * 0.74, y - r * 0.98], [x + s * r * 0.4, y - r * 0.8]], '#ffc2d8', false); }
+  }
+  if (f.ear === 'tuft') for (const s of [-1, 0, 1]) blob(x + s * r * 0.14, y - r, r * 0.08, r * 0.24, f.fur, s * 0.5);
+  blob(x, y, r, r * 0.92, f.fur);
+  if (f.ear === 'round' || f.ear === 'point') blob(x, y + r * 0.32, r * 0.42, r * 0.3, f.face, 0, false);
+  for (const s of [-1, 1]) { // cheeks and eyes: ^ ^ when happy, closed when asleep, a blink now and then
+    const ex = x + s * r * 0.34, ey = y - r * 0.08;
+    blob(x + s * r * 0.58, y + r * 0.26, r * 0.14, r * 0.09, 'rgba(255,120,150,.45)', 0, false);
+    g.strokeStyle = '#3b2a33'; g.lineWidth = r * 0.07; g.lineCap = 'round'; g.beginPath();
+    if (m.sleep) { g.arc(ex, ey - r * 0.04, r * 0.11, Math.PI * 0.15, Math.PI * 0.85); g.stroke(); }
+    else if (m.happy) { g.arc(ex, ey + r * 0.06, r * 0.12, Math.PI * 1.15, Math.PI * 1.85); g.stroke(); }
+    else if ((now + j * 1.7) % 4 < 0.13) { g.moveTo(ex - r * 0.1, ey); g.lineTo(ex + r * 0.1, ey); g.stroke(); }
+    else { dot(ex, ey, r * 0.11, '#3b2a33'); dot(ex - r * 0.04, ey - r * 0.04, r * 0.035, '#fff'); }
+  }
+  const my = y + r * 0.4, o = m.open;
+  if (f.ear === 'tuft') { // the chick's beak opens to sing and to eat
+    const by = y + r * 0.26, gap = o * r * 0.16;
+    if (gap > 1) blob(x, by + gap / 2, r * 0.15, gap / 2, '#8f2d4c', 0, false);
+    tri([[x - r * 0.2, by], [x, by - r * 0.12], [x + r * 0.2, by]], '#ff922b', false); tri([[x - r * 0.15, by + gap], [x + r * 0.15, by + gap], [x, by + gap + r * 0.1]], '#f76707', false);
+    return;
+  }
+  blob(x, y + r * 0.2, r * (f.ear === 'round' ? 0.13 : 0.08), r * 0.07, f.ear === 'round' ? '#3b2a33' : '#ff8fab', 0, false); // nose
+  if (o > 0.05) { blob(x, my + r * 0.05, r * 0.14, r * (0.04 + 0.15 * o), '#8f2d4c', 0, false); blob(x, my + r * (0.08 + 0.1 * o), r * 0.08, r * 0.04, '#ff8fab', 0, false); }
+  else { g.strokeStyle = '#3b2a33'; g.lineWidth = r * 0.05; g.beginPath(); g.arc(x, my - r * 0.12, r * 0.14, 0.25 * Math.PI, 0.75 * Math.PI); g.stroke(); }
+  if (f.ear === 'point') { g.strokeStyle = 'rgba(70,40,60,.5)'; g.lineWidth = r * 0.03; g.beginPath(); for (const s of [-1, 1]) for (const k of [-1, 1]) { g.moveTo(x + s * r * 0.3, y + r * 0.3); g.lineTo(x + s * r * 0.78, y + r * (0.25 + k * 0.08)); } g.stroke(); }
+}
+function paws(j, p) { // resting on the table, up in the air to cheer, or waving bye-bye
+  const r = p.fr, m = p.m, up = m.cheer || m.wave;
+  const hand = s => [p.x + s * r * 1.05 + (m.wave ? Math.sin(now * 6) * r * 0.25 : 0), p.hy - r * 0.35 + (m.wave ? 0 : Math.sin(now * 9 + s) * r * 0.1)];
+  g.lineCap = 'round';
+  if (up) for (const s of [-1, 1]) for (const [w, c] of [[0.34, 'rgba(70,40,60,.4)'], [0.24, FRIENDS[j].fur]]) {
+    g.lineWidth = r * w; g.strokeStyle = c; g.beginPath(); g.moveTo(p.x + s * r * 0.6, p.hy + r * 0.8); g.lineTo(...hand(s)); g.stroke();
+  }
+  g.lineWidth = r * 0.06;
+  for (const s of [-1, 1]) { const [hx, hy] = up ? hand(s) : [p.x + s * r * 0.55, ty + r * 0.05]; blob(hx, hy, r * 0.22, r * 0.17, FRIENDS[j].fur); }
+}
+
+// ---------- scene ----------
+function backdrop() {
+  const gr = g.createLinearGradient(0, 0, 0, ty); gr.addColorStop(0, '#bfe5ff'); gr.addColorStop(1, '#eef9ff');
+  g.fillStyle = gr; g.fillRect(0, 0, W, ty);
+  [[0.04, 0.2, '#ff8787'], [0.12, 0.12, '#b197fc'], [0.88, 0.12, '#ffd43b'], [0.96, 0.21, '#ff8fbd']].forEach(([bx, by, c], i) => {
+    const x = W * bx, y = H * by + Math.sin(now * 1.3 + i * 2) * 8, r = H * 0.045;
+    g.strokeStyle = '#8fb3c9'; g.lineWidth = 1.5; g.beginPath(); g.moveTo(x, y + r * 1.2); g.quadraticCurveTo(x - 12, (y + ty) / 2, x + 4, ty); g.stroke();
+    ell(x, y, r, r * 1.2, c); g.fillStyle = 'rgba(255,255,255,.45)'; g.beginPath(); g.ellipse(x - r * 0.35, y - r * 0.45, r * 0.2, r * 0.3, -0.5, 0, TAU); g.fill();
+  });
+  if (age) { // birthday week: a big gold number balloon
+    const x = W * 0.37, y = H * 0.22 + Math.sin(now * 1.1) * 6, s = H * 0.16; // off-centre, clear of the name sign
+    g.strokeStyle = '#8fb3c9'; g.lineWidth = 1.5; g.beginPath(); g.moveTo(x, y + s * 0.5); g.quadraticCurveTo(x + 14, (y + ty) / 2, x - 4, ty); g.stroke();
+    g.font = `900 ${Math.round(s)}px system-ui, sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.lineJoin = 'round';
+    g.lineWidth = s * 0.14; g.strokeStyle = '#f59f00'; g.strokeText(age, x, y); g.fillStyle = '#ffd43b'; g.fillText(age, x, y);
+    g.fillStyle = 'rgba(255,255,255,.5)'; g.beginPath(); g.ellipse(x - s * 0.12, y - s * 0.22, s * 0.05, s * 0.1, -0.4, 0, TAU); g.fill();
+  }
+  const sag = x => H * 0.04 + Math.sin(Math.PI * x / W) * H * 0.05;
+  g.strokeStyle = '#8fb3c9'; g.lineWidth = 2; g.beginPath(); for (let x = 0; x <= W; x += 20) g.lineTo(x, sag(x)); g.stroke();
+  for (let i = 0; i < 13; i++) {
+    const x0 = W * (i + 0.12) / 13, x1 = W * (i + 0.88) / 13, xm = (x0 + x1) / 2;
+    g.fillStyle = CONF[i % 5]; g.beginPath(); g.moveTo(x0, sag(x0)); g.lineTo(x1, sag(x1)); g.lineTo(xm, sag(xm) + H * 0.06); g.fill();
+  }
+}
+function table() { // mint gingham in perspective: a calm ground that makes the cake pop
+  g.fillStyle = '#effcf6'; g.fillRect(0, ty, W, H - ty);
+  const vy = ty - H * 1.4, w0 = W / 26, sc = (H - vy) / (ty - vy);
+  g.fillStyle = 'rgba(32,201,151,.2)'; g.beginPath();
+  for (let i = -20; i < 20; i += 2) { g.moveTo(cx + i * w0, ty); g.lineTo(cx + (i + 1) * w0, ty); g.lineTo(cx + (i + 1) * w0 * sc, H); g.lineTo(cx + i * w0 * sc, H); }
+  g.fill(); g.beginPath();
+  for (let y = ty, k = 0; y < H; k++) { const h = w0 * 0.6 * (y - vy) / (ty - vy); if (k % 2 === 0) g.rect(0, y, W, h); y += h; }
+  g.fill();
+  g.fillStyle = 'rgba(20,90,70,.12)'; g.fillRect(0, ty, W, 3);
+}
+function night(t) { // after bye-bye the room dims, the stars come out and a sleepy moon smiles
+  const a = clamp((t - 5) / 3); if (!a) return;
+  g.fillStyle = `rgba(28,36,92,${0.45 * a})`; g.fillRect(0, 0, W, H);
+  g.globalAlpha = a;
+  for (let i = 0; i < 28; i++) dot(W * ((i * 0.618 + 0.05) % 1), ty * (0.15 + 0.7 * ((i * 0.383 + 0.2) % 1)), 1.5 + (1 + Math.sin(now * 1.7 + i * 2.3)) * 1.2, '#fff9db');
+  const mx = W * 0.68, my = H * 0.2, mr = H * 0.06;
+  dot(mx, my, mr * 1.5, 'rgba(255,243,191,.18)'); dot(mx, my, mr, '#fff3bf');
+  g.strokeStyle = '#b08d57'; g.lineWidth = mr * 0.08; g.lineCap = 'round'; g.beginPath();
+  for (const s of [-1, 1]) { g.moveTo(mx + s * mr * 0.52, my - mr * 0.05); g.arc(mx + s * mr * 0.35, my - mr * 0.05, mr * 0.17, 0, Math.PI); }
+  g.moveTo(mx + mr * 0.2, my + mr * 0.3); g.arc(mx, my + mr * 0.3, mr * 0.2, 0, Math.PI); g.stroke();
+  g.globalAlpha = 1;
+}
+function gateRing() { // shows a grown-up that holding the corner is working
+  if (gateAt === null || now - gateAt < 0.4) return;
+  g.lineWidth = 5; g.lineCap = 'round'; g.strokeStyle = 'rgba(255,255,255,.85)'; g.beginPath(); g.arc(45, 45, 24, 0, TAU); g.stroke();
+  g.strokeStyle = '#c2255c'; g.beginPath(); g.arc(45, 45, 24, -Math.PI / 2, -Math.PI / 2 + TAU * clamp((now - gateAt) / 3)); g.stroke();
+}
+
+// ---------- loop ----------
+function update() {
+  const t = now - st;
+  if (gateAt !== null && now - gateAt > 3) openCorner();
+  if (escAt !== null && now - escAt > 2) { escAt = null; leaveFull(); } // hold Esc to leave, also where the browser has no keyboard lock
+  if (state === 'pick') { const bi = bouncing(); if (t > 0.5 && bi !== lastBounce) { lastBounce = bi; tone(hz([72, 76, 79][bi]), 0.18, { type: 'sine', vol: 0.06 }); } }
+  if (state === 'picked' && t > 0.7) { state = 'gift'; st = now; }
+  if (state === 'gift' && t > 1.2 && now > giggleAt + 1.6) { giggleAt = now; giggle(); }
+  if (state === 'reveal' && passed(st, 0.62)) { tada(); burst(cx, cy - R * 0.1, 26, ['#fff', '#ffd43b', ...CONF], 380, 'star', 150); }
+  if (state === 'reveal' && t > 1.2) { state = 'candles'; st = now; }
+  if (state === 'blowing' && t > 1.4) { state = 'ready'; st = now; }
+  if ((state === 'candles' || state === 'ready') && now - lastInput > 6 && now - idleAt > 4) { // the cake wiggles to invite her
+    idleAt = now; cake.squashAt = now; cake.hopAt = now; tone(hz(79), 0.12, { type: 'sine', vol: 0.05 }); tone(hz(84), 0.18, { type: 'sine', at: 0.1, vol: 0.05 });
+  }
+  if (state === 'cutting') {
+    if (passed(st, 0.22 * BEAT)) chop(0);
+    if (passed(st, 1.22 * BEAT)) chop(1);
+    if (passed(st, 2 * BEAT)) pull();
+    if (t > 5 * BEAT && cake.n < N) { state = 'ready'; st = now; }
+    else if (cake.n >= N && slices.every(s => s.gone)) party();
+  }
+  if (state === 'party' && t > 3) cakesDone >= S.cakes ? bye() : startPick();
+  if (state === 'bye') plates.forEach((p, j) => { const k = t - 6 - j * 0.4; if (k > 0 && k % 1.6 < dt) burst(p.x + p.fr * 0.7, p.fy - p.fr, 1, ['#dbe4ff'], 20, 'z', -60); }); // zzz
+  if (cake && cake.singer >= 0) { let o = 0; for (const [, b] of PH[cake.singer]) { // a floating note from each singer (or the music box) on every note
+    if (passed(cake.singAt, o)) { const sg = singers(); if (!sg.length) burst(cx, cy - R * 0.4, 1, ['#7048e8', '#e64980', '#1c7ed6'], 50, 'note', -140);
+      for (const j of sg) burst(plates[j].x + plates[j].fr * 0.8, plates[j].fy - plates[j].fr * 0.6, 1, ['#7048e8', '#e64980', '#1c7ed6'], 50, 'note', -140); }
+    o += b * BEAT;
+  } }
+  for (const s of slices) {
+    const p = plates[s.f];
+    if (passed(s.t0, 1.2 * BEAT)) tone(300, BEAT, { type: 'sine', to: 700, vol: 0.08 });
+    if (passed(s.t0, 2 * BEAT)) { s.landAt = now; tone(520, 0.35, { type: 'sine', to: 160, vol: 0.12 }); burst(p.x, p.y - R * 0.15, 10, ['#fff', '#ffd43b'], 240, 'star', 200); }
+    BITES.forEach((b, k) => { if (passed(s.t0, (2 + b) * BEAT)) { s.bites = k + 1; s.biteAt = now; nom(); burst(p.x, p.y - R * 0.1, 8, s.c.th.layers, 140, 'bit'); } });
+    if (!s.gone && s.bites === 3) { s.gone = true; s.goneAt = now; mmm(s.f); burst(p.x, p.fy - p.fr * 1.3, 1, ['#ff6b8b'], 30, 'heart', -90); }
+  }
+  if (now - partyAt < 2.5) for (let j = 0; j < 3 * calm; j++)
+    parts.push({ x: Math.random() * W, y: -10, vx: (Math.random() - 0.5) * 80, vy: 60 + Math.random() * 80, gr: 60, life: 0, max: 5,
+      c: CONF[Math.random() * 6 | 0], s: 4 + Math.random() * 4, a: Math.random() * TAU, va: (Math.random() - 0.5) * 8, k: 'bit' });
+  for (const p of parts) { p.vy += p.gr * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.a += p.va * dt; p.life += dt; }
+  parts = parts.filter(p => p.life < p.max);
+}
+const CAKE_UP = new Set(['reveal', 'candles', 'blowing', 'ready', 'cutting']);
+function frame(ms) {
+  const n = ms / 1000; dt = Math.min(0.05, Math.max(0, n - last)); last = n; now += dt;
+  update();
+  const dpr = cv.width / W; g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  backdrop();
+  plates.forEach((p, j) => { // friends sway about their middles while a line is sung
+    p.m = mood(j); g.save();
+    if (p.m.sway) { g.translate(p.x, p.fy + p.fr * 1.4); g.rotate(p.m.sway * (j % 2 ? -1 : 1)); g.translate(-p.x, -p.fy - p.fr * 1.4); }
+    friend(j, p); g.restore();
+  });
+  table();
+  plates.forEach((p, j) => {
+    paws(j, p); plate(p.x, p.y, p.r);
+    const s = slices.findLast(s => s.f === j); if (s?.gone) s.c.th.layers.slice(0, 3).forEach((c, k) => dot(p.x + (k - 1) * p.r * 0.3, p.y + (k % 2) * p.r * 0.1, p.r * 0.05, c));
+  });
+  stand();
+  const rt = now - st;
+  if (state === 'reveal') present(false);
+  if (CAKE_UP.has(state) && cake.n < N) { // during the reveal the cake grows, jumps out of the box and lands with a squash
+    const sc = state === 'reveal' ? 0.35 + 0.65 * ease(clamp((rt - 0.12) / 0.6)) : 1, jump = state === 'reveal' ? Math.sin(Math.PI * clamp((rt - 0.12) / 0.75)) * R : Math.sin(Math.PI * clamp((now - cake.hopAt) / 0.35)) * R * 0.1 * calm;
+    put(cx, cy + HC * (1 - sc) - jump, sc, 0.18 * wob(now - cake.squashAt) + (state === 'ready' || state === 'candles' ? 0.012 * Math.sin(now * 2.5) : 0));
+    wedge(cake.lo * W1 + FRONT, cake.hi * W1 + FRONT, FRONT, cake);
+    if (state === 'cutting' && cake.n === cake.singer) grooves();
+    g.restore();
+  }
+  if (state === 'gift' && rt < 0.75) { put(cx, cy + HC * 0.65, 0.35, 0); wedge(FRONT, FRONT + TAU, FRONT, cake); g.restore(); } // the picked cake waits as the present drops over it
+  if (state === 'gift' || state === 'reveal') present(true);
+  knife();
+  for (const s of slices) if (!s.gone) drawSlice(s);
+  if (state === 'pick' || state === 'picked') candidates();
+  if (state === 'bye') night(rt);
+  g.font = `bold ${Math.round(R * 0.2)}px sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle';
+  for (const p of parts) {
+    g.globalAlpha = 1 - (p.life / p.max) ** 2; g.fillStyle = p.c;
+    g.save(); g.translate(p.x, p.y); if (p.k === 'star' || p.k === 'bit') g.rotate(p.a); g.beginPath();
+    const s = p.s;
+    if (p.k === 'star') { star(0, 0, s); g.fill(); }
+    else if (p.k === 'puff') { g.globalAlpha *= 0.8; g.arc(0, 0, s * (1 + p.life * 2.5), 0, TAU); g.fill(); }
+    else if (p.k === 'note') g.fillText('♪', 0, 0);
+    else if (p.k === 'z') g.fillText('z', 0, 0);
+    else if (p.k === 'heart') { heart(0, 0, s * 2.2); g.fill(); }
+    else if (p.k === 'candy') { g.arc(0, 0, s, 0, TAU); g.fill(); dot(-s * 0.3, -s * 0.3, s * 0.3, 'rgba(255,255,255,.6)'); }
+    else g.fillRect(-s, -s * 0.4, s * 2, s * 0.8);
+    g.restore();
+  }
+  g.globalAlpha = 1;
+  gateRing();
+  requestAnimationFrame(frame);
+}
+startSession();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
