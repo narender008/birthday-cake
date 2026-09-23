@@ -339,11 +339,11 @@ function fill() {
 function openCorner() { gateAt = null; fill(); corner.hidden = false; }
 function closeCorner() { corner.hidden = true; lastInput = now; }
 form.addEventListener('input', () => {
-  const f = form.elements;
+  const f = form.elements, ins = [...form.querySelectorAll('[name=insides]:checked')].map(b => b.value);
   S = clean({ cakes: f.cakes.value, slices: f.slices.value, volume: f.volume.value, calm: f.calm.checked, kidname: f.kidname.value, bday: f.bday.value,
-    insides: [...form.querySelectorAll('[name=insides]:checked')].map(b => b.value) });
+    insides: ins.length ? ins : S.insides });
   save(); apply();
-  if (!form.querySelector('[name=insides]:checked')) fill(); // at least one kind of cake stays on
+  if (!ins.length) fill(); // at least one kind of cake stays on
 });
 form.addEventListener('submit', e => { e.preventDefault(); closeCorner(); });
 document.getElementById('forget').addEventListener('click', () => { S.kidname = ''; S.bday = ''; save(); apply(); fill(); });
@@ -705,7 +705,7 @@ function update() {
     if (passed(st, 0.22 * BEAT)) chop(0);
     if (passed(st, 1.22 * BEAT)) chop(1);
     if (passed(st, 2 * BEAT)) pull();
-    if (t > 5 * BEAT && cake.n < N) { state = 'ready'; st = now; }
+    if (t > Math.max(5 * BEAT, phLen(cake.singer)) && cake.n < N) { state = 'ready'; st = now; }
     else if (cake.n >= N && slices.every(s => s.gone)) party();
   }
   if (state === 'party' && t > 3) cakesDone >= S.cakes ? bye() : startPick();
