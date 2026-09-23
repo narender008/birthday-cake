@@ -228,7 +228,7 @@ function makeCake(ins, fr) { // mix and match: inside x frosting colour x frosti
 }
 function startSession() { cakesDone = 0; slices = []; apply(); startPick(); }
 function startPick() { // three different cakes pop up in front of her
-  setSlices(S.slices);
+  setSlices(S.slices); cake = null; // the old cake's singer may index the previous slice count's song lines
   const ins = shuffle(S.insides), fr = shuffle(FROST);
   cands = [0, 1, 2].map(i => makeCake(ins[i % ins.length], fr[i]));
   state = 'pick'; st = now; lastBounce = -1;
@@ -315,7 +315,7 @@ addEventListener('keydown', e => {
   if (e.repeat) return;
   if (e.ctrlKey && e.shiftKey && e.code === 'KeyP') return openCorner();
   arm();
-  if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) { lastInput = now; return burst(...keySpot(e.code), 6, ['#fff', '#ffd43b', '#ff8fbd'], 200, 'star', 200); } // modifiers only sparkle, so the grown-up chord doesn't play a turn
+  if (['Control', 'Shift', 'Alt', 'Meta', 'Escape'].includes(e.key)) { lastInput = now; return burst(...keySpot(e.code), 6, ['#fff', '#ffd43b', '#ff8fbd'], 200, 'star', 200); } // modifiers and Esc only sparkle, so the grown-up chord or exit doesn't play a turn
   go(...keySpot(e.code), false);
 });
 addEventListener('keyup', e => { if (e.code === 'Escape') escAt = null; });
